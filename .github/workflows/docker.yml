@@ -1,0 +1,41 @@
+name: Docker
+
+# Construye las imagenes y prueba la comunicacion entre contenedores en cada push o pull request.
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  imagenes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Crear .env de prueba desde la plantilla
+        run: cp .env.example .env
+
+      - name: Validar docker-compose.yml
+        run: docker compose config --quiet
+
+      - name: Construir las imagenes
+        run: docker compose build
+
+      - name: Levantar los contenedores
+        run: docker compose up -d --wait
+
+      - name: Ver contenedores
+        run: docker compose ps
+
+      - name: Probar la comunicacion app -> db
+        run: bash scripts/prueba_comunicacion.sh
+
+      - name: Registros si algo falla
+        if: failure()
+        run: docker compose logs
+
+      - name: Apagar y borrar volumenes
+        if: always()
+        run: docker compose down -v
