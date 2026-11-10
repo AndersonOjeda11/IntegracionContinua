@@ -1,0 +1,13 @@
+# Se ignora todo por defecto y solo se permite lo que la imagen necesita.
+# Asi nunca entran a la imagen el .env, el historial de git, las pruebas ni archivos temporales.
+*
+
+!calculadora.py
+!app/main.py
+!app/requirements.txt
+
+# Aunque se agreguen excepciones en el futuro, esto nunca debe entrar:
+**/.env
+**/__pycache__
+**/*.pyc
+.git
