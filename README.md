@@ -1,10 +1,132 @@
 # calculadora-ci
 
-Proyecto de la *Guía de ejercicios: Manejo de repositorios*. Es una calculadora en Python con
-pruebas en pytest, configuración por ambiente y un pipeline de integración continua en GitHub
-Actions.
+Calculadora en Python con pruebas en pytest, configuración por ambiente, un pipeline de
+integración continua en GitHub Actions y, desde la Entrega del proyecto 1, dos contenedores
+Docker que se comunican entre sí.
 
-## Cómo ejecutarlo
+## Proyecto 1: Docker con dos contenedores comunicados
+
+```
+ Navegador / curl
+       │  http://localhost:5000
+       ▼
+┌──────────────────────── red_calculadora (bridge) ────────────────────────┐
+│                                                                          │
+│  ┌──────────────────────┐   host "db", puerto 5432   ┌─────────────────┐ │
+│  │ app (calculadora-app)│ ─────────────────────────▶ │ db (PostgreSQL) │ │
+│  │ Flask + Gunicorn     │ ◀───────────────────────── │ postgres:17.11  │ │
+│  │ python:3.13.18-slim  │   guarda y lee operaciones │ volumen datos_db│ │
+│  └──────────────────────┘                            └─────────────────┘ │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+| Servicio | Papel | Imagen | Puerto |
+| --- | --- | --- | --- |
+| `app` | API de la calculadora: hace la operación y la guarda en la base de datos | `calculadora-app:1.0` (Dockerfile propio sobre `python:3.13.18-slim`) | `5000` publicado en el equipo |
+| `db` | Base de datos que guarda el historial de operaciones | `postgres:17.11-alpine` | `5432`, solo dentro de la red |
+
+La app se conecta a la base de datos con el **nombre del servicio** (`DB_HOST: db`), que Docker
+resuelve dentro de la red `red_calculadora`. No usa `localhost` ni una IP fija.
+
+### Estructura
+
+```
+.
+├── app/
+│   ├── Dockerfile          # contenedor 1: la aplicación
+│   ├── main.py             # API Flask (rutas /salud y /operaciones)
+│   └── requirements.txt    # dependencias con versión fija
+├── db/
+│   └── init.sql            # contenedor 2: crea la tabla "operaciones"
+├── scripts/
+│   └── prueba_comunicacion.sh   # prueba de ida y vuelta app <-> db
+├── .github/workflows/
+│   ├── ci.yml              # pruebas con pytest
+│   └── docker.yml          # construye las imágenes y prueba la comunicación
+├── docker-compose.yml      # orquesta los dos servicios
+├── .dockerignore
+├── .env.example            # plantilla de variables (el .env real no se sube)
+├── calculadora.py          # lógica que reutiliza la API
+└── config.py
+```
+
+### Comandos para levantar los contenedores
+
+1. Cree el archivo `.env` a partir de la plantilla y cambie la contraseña:
+
+   ```bash
+   cp .env.example .env
+   ```
+
+2. Construya la imagen de la aplicación (opcional, `compose up --build` también la construye):
+
+   ```bash
+   docker build -f app/Dockerfile -t calculadora-app:1.0 .
+   ```
+
+3. Levante los dos contenedores:
+
+   ```bash
+   docker compose up -d --build
+   ```
+
+4. Revise que estén corriendo y en qué red están:
+
+   ```bash
+   docker ps
+   docker network inspect red_calculadora
+   ```
+
+5. Pruebe la comunicación (guarda una operación y la vuelve a leer desde la base de datos):
+
+   ```bash
+   bash scripts/prueba_comunicacion.sh
+   ```
+
+   O a mano:
+
+   ```bash
+   curl http://localhost:5000/salud
+   curl -X POST http://localhost:5000/operaciones -H "Content-Type: application/json" -d '{"operacion": "sumar", "a": 2, "b": 3}'
+   curl http://localhost:5000/operaciones/1
+   ```
+
+6. Apague todo (agregue `-v` para borrar también el volumen con los datos):
+
+   ```bash
+   docker compose down
+   ```
+
+### Rutas de la API
+
+| Método | Ruta | Qué hace |
+| --- | --- | --- |
+| `GET` | `/salud` | Consulta la base de datos y responde con el host usado (`db`), su IP en la red y la versión de PostgreSQL |
+| `POST` | `/operaciones` | Recibe `{"operacion", "a", "b"}`, calcula el resultado y lo guarda en la base de datos |
+| `GET` | `/operaciones` | Lista las últimas 20 operaciones guardadas |
+| `GET` | `/operaciones/<id>` | Lee una operación guardada |
+
+Operaciones disponibles: `sumar`, `restar`, `multiplicar`, `dividir` y `potencia`.
+
+### Buenas prácticas aplicadas
+
+- Imágenes base oficiales con versión fija: `python:3.13.18-slim` y `postgres:17.11-alpine`.
+- Contraseñas solo en `.env`, que está en `.gitignore`. El repositorio solo tiene `.env.example`.
+- Ningún secreto en el código: la app lee las credenciales de variables de entorno.
+- `.dockerignore` en modo lista blanca: a la imagen solo entran `calculadora.py`, `app/main.py` y
+  `app/requirements.txt`.
+- La app corre con un usuario sin privilegios (`appuser`) y tiene `HEALTHCHECK`.
+- La base de datos no publica su puerto en el equipo anfitrión; solo es accesible dentro de la red.
+- Los datos persisten en el volumen `calculadora_datos_db` aunque se borren los contenedores.
+
+### Integración continua
+
+El workflow `.github/workflows/docker.yml` corre en cada push y pull request: valida el
+`docker-compose.yml`, construye las imágenes, levanta los contenedores y ejecuta
+`scripts/prueba_comunicacion.sh`. Si la app no logra guardar y leer el dato en la base de datos,
+el check queda en rojo.
+
+## Guía de ejercicios: cómo ejecutar las pruebas
 
 ```bash
 python -m pip install pytest
