@@ -1,0 +1,33 @@
+# Configuracion de Jenkins como codigo (plugin Configuration as Code).
+# Los ${...} se leen de variables de entorno que llegan desde jenkins/.env; no hay secretos en este archivo.
+jenkins:
+  systemMessage: "Jenkins de calculadora-ci (Entrega 2). Configurado con Configuration as Code."
+  numExecutors: 2
+  mode: NORMAL
+  securityRealm:
+    local:
+      allowsSignup: false
+      users:
+        - id: "${JENKINS_ADMIN_ID}"
+          name: "Administrador"
+          password: "${JENKINS_ADMIN_PASSWORD}"
+  authorizationStrategy:
+    loggedInUsersCanDoAnything:
+      allowAnonymousRead: false
+
+# Credencial que usa el Jenkinsfile para levantar la base de datos en la prueba de integracion.
+# Jenkins la guarda cifrada; el Jenkinsfile solo conoce su ID ("postgres-ci").
+credentials:
+  system:
+    domainCredentials:
+      - credentials:
+          - usernamePassword:
+              scope: GLOBAL
+              id: "postgres-ci"
+              description: "Usuario y contrasena de PostgreSQL para las pruebas del pipeline"
+              username: "${CI_POSTGRES_USER}"
+              password: "${CI_POSTGRES_PASSWORD}"
+
+unclassified:
+  location:
+    url: "http://localhost:8080/"

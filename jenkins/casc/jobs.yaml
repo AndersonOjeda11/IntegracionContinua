@@ -1,0 +1,29 @@
+# Job del pipeline (plugin Job DSL). El pipeline en si esta en el Jenkinsfile del repositorio.
+jobs:
+  - script: |
+      pipelineJob('calculadora-ci') {
+        description('Pipeline de calculadora-ci: Checkout, Build y Test de los dos contenedores de la Entrega 1. Se dispara con Poll SCM en cada push a main.')
+        properties {
+          pipelineTriggers {
+            triggers {
+              pollSCM {
+                scmpoll_spec('* * * * *')
+              }
+            }
+          }
+        }
+        definition {
+          cpsScm {
+            scm {
+              git {
+                remote {
+                  url('https://github.com/AndersonOjeda11/IntegracionContinua.git')
+                }
+                branch('*/main')
+              }
+            }
+            scriptPath('Jenkinsfile')
+            lightweight(true)
+          }
+        }
+      }

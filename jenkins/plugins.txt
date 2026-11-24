@@ -1,0 +1,12 @@
+git
+github
+workflow-aggregator
+docker-workflow
+credentials
+credentials-binding
+pipeline-stage-view
+pipeline-graph-view
+junit
+timestamper
+configuration-as-code
+job-dsl

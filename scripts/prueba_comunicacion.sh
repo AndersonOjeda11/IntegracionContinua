@@ -1,30 +1,46 @@
 #!/usr/bin/env bash
 # Prueba de ida y vuelta entre los contenedores:
 # la app guarda una operacion en la base de datos (servicio "db") y luego la vuelve a leer.
-# Uso:  bash scripts/prueba_comunicacion.sh [URL]    (por defecto http://localhost:5000)
+# Las peticiones se hacen desde dentro del contenedor de la app, asi la prueba no depende de
+# puertos publicados y funciona igual en el equipo local, en Jenkins y en GitHub Actions.
+# Uso:  bash scripts/prueba_comunicacion.sh
+# Si cualquier paso falla, el script termina con error (y el build de Jenkins falla).
 set -euo pipefail
 
-URL="${1:-http://localhost:5000}"
+# Peticion HTTP a la API: api METODO RUTA [CUERPO_JSON]
+api() {
+  docker compose exec -T app python - "$1" "$2" "${3:-}" <<'PY'
+import sys
+import urllib.request
+
+metodo, ruta, cuerpo = sys.argv[1], sys.argv[2], sys.argv[3]
+peticion = urllib.request.Request(
+    "http://localhost:5000" + ruta,
+    data=cuerpo.encode() if cuerpo else None,
+    method=metodo,
+    headers={"Content-Type": "application/json"},
+)
+with urllib.request.urlopen(peticion, timeout=10) as respuesta:
+    print(respuesta.read().decode().strip())
+PY
+}
 
 echo "== 1. La app resuelve el servicio 'db' por su nombre dentro de la red de Docker"
 docker compose exec -T app getent hosts db
 
 echo
 echo "== 2. Salud de la app y conexion con la base de datos"
-curl -fsS "$URL/salud"
-echo
+api GET /salud
 
 echo
 echo "== 3. Guardar una operacion (app -> db)"
-respuesta=$(curl -fsS -X POST "$URL/operaciones" \
-  -H "Content-Type: application/json" \
-  -d '{"operacion": "multiplicar", "a": 6, "b": 7}')
+respuesta=$(api POST /operaciones '{"operacion": "multiplicar", "a": 6, "b": 7}')
 echo "$respuesta"
 id=$(echo "$respuesta" | sed -E 's/.*"id": ?([0-9]+).*/\1/')
 
 echo
 echo "== 4. Leer la operacion $id desde la base de datos (db -> app)"
-leida=$(curl -fsS "$URL/operaciones/$id")
+leida=$(api GET "/operaciones/$id")
 echo "$leida"
 
 echo
