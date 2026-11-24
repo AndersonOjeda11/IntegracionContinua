@@ -1,8 +1,8 @@
 # calculadora-ci
 
-Calculadora en Python con pruebas en pytest, configuración por ambiente, un pipeline de
-integración continua en GitHub Actions y, desde la Entrega del proyecto 1, dos contenedores
-Docker que se comunican entre sí.
+Calculadora en Python con pruebas en pytest, configuración por ambiente, dos contenedores Docker
+que se comunican entre sí (Entrega del proyecto 1) y un pipeline de integración continua en
+Jenkins que los construye y los prueba en cada push (Entrega del proyecto 2).
 
 ## Proyecto 1: Docker con dos contenedores comunicados
 
@@ -23,10 +23,12 @@ Docker que se comunican entre sí.
 | Servicio | Papel | Imagen | Puerto |
 | --- | --- | --- | --- |
 | `app` | API de la calculadora: hace la operación y la guarda en la base de datos | `calculadora-app:1.0` (Dockerfile propio sobre `python:3.13.18-slim`) | `5000` publicado en el equipo |
-| `db` | Base de datos que guarda el historial de operaciones | `postgres:17.11-alpine` | `5432`, solo dentro de la red |
+| `db` | Base de datos que guarda el historial de operaciones | `calculadora-db:1.0` (Dockerfile propio sobre `postgres:17.11-alpine`) | `5432`, solo dentro de la red |
 
 La app se conecta a la base de datos con el **nombre del servicio** (`DB_HOST: db`), que Docker
-resuelve dentro de la red `red_calculadora`. No usa `localhost` ni una IP fija.
+resuelve dentro de la red `red_calculadora`. No usa `localhost` ni una IP fija. Compose antepone
+el nombre del proyecto a la red, los contenedores y el volumen (por ejemplo
+`calculadora_red_calculadora`), así Jenkins puede levantar su propia copia sin chocar con esta.
 
 ### Estructura
 
@@ -37,12 +39,20 @@ resuelve dentro de la red `red_calculadora`. No usa `localhost` ni una IP fija.
 │   ├── main.py             # API Flask (rutas /salud y /operaciones)
 │   └── requirements.txt    # dependencias con versión fija
 ├── db/
-│   └── init.sql            # contenedor 2: crea la tabla "operaciones"
+│   ├── Dockerfile          # contenedor 2: PostgreSQL con el script de inicio
+│   └── init.sql            # crea la tabla "operaciones"
+├── jenkins/
+│   ├── Dockerfile          # Jenkins LTS + cliente de Docker + Python
+│   ├── docker-compose.yml  # levanta Jenkins con su volumen
+│   ├── plugins.txt         # plugins de Jenkins
+│   ├── casc/               # configuración como código (usuario, credencial y job)
+│   └── .env.example        # plantilla de variables de Jenkins
 ├── scripts/
 │   └── prueba_comunicacion.sh   # prueba de ida y vuelta app <-> db
 ├── .github/workflows/
 │   ├── ci.yml              # pruebas con pytest
 │   └── docker.yml          # construye las imágenes y prueba la comunicación
+├── Jenkinsfile             # pipeline de Jenkins: Checkout, Build, Test y post
 ├── docker-compose.yml      # orquesta los dos servicios
 ├── .dockerignore
 ├── .env.example            # plantilla de variables (el .env real no se sube)
@@ -58,10 +68,11 @@ resuelve dentro de la red `red_calculadora`. No usa `localhost` ni una IP fija.
    cp .env.example .env
    ```
 
-2. Construya la imagen de la aplicación (opcional, `compose up --build` también la construye):
+2. Construya las imágenes de los dos servicios (opcional, `compose up --build` también las construye):
 
    ```bash
    docker build -f app/Dockerfile -t calculadora-app:1.0 .
+   docker build -t calculadora-db:1.0 db
    ```
 
 3. Levante los dos contenedores:
@@ -74,7 +85,7 @@ resuelve dentro de la red `red_calculadora`. No usa `localhost` ni una IP fija.
 
    ```bash
    docker ps
-   docker network inspect red_calculadora
+   docker network inspect calculadora_red_calculadora
    ```
 
 5. Pruebe la comunicación (guarda una operación y la vuelve a leer desde la base de datos):
@@ -110,7 +121,8 @@ Operaciones disponibles: `sumar`, `restar`, `multiplicar`, `dividir` y `potencia
 
 ### Buenas prácticas aplicadas
 
-- Imágenes base oficiales con versión fija: `python:3.13.18-slim` y `postgres:17.11-alpine`.
+- Imágenes base oficiales con versión fija: `python:3.13.18-slim`, `postgres:17.11-alpine` y
+  `jenkins/jenkins:2.580.2-lts-jdk21`.
 - Contraseñas solo en `.env`, que está en `.gitignore`. El repositorio solo tiene `.env.example`.
 - Ningún secreto en el código: la app lee las credenciales de variables de entorno.
 - `.dockerignore` en modo lista blanca: a la imagen solo entran `calculadora.py`, `app/main.py` y
@@ -119,12 +131,64 @@ Operaciones disponibles: `sumar`, `restar`, `multiplicar`, `dividir` y `potencia
 - La base de datos no publica su puerto en el equipo anfitrión; solo es accesible dentro de la red.
 - Los datos persisten en el volumen `calculadora_datos_db` aunque se borren los contenedores.
 
-### Integración continua
+### GitHub Actions
 
 El workflow `.github/workflows/docker.yml` corre en cada push y pull request: valida el
 `docker-compose.yml`, construye las imágenes, levanta los contenedores y ejecuta
 `scripts/prueba_comunicacion.sh`. Si la app no logra guardar y leer el dato en la base de datos,
 el check queda en rojo.
+
+## Proyecto 2: integración continua con Jenkins
+
+```
+commit ──▶ GitHub ──▶ Jenkins (Poll SCM cada minuto) ──▶ Checkout ──▶ Build ──▶ Test ──▶ Test de integración ──▶ post
+                                                         Jenkinsfile   2 imágenes  pytest    compose + prueba app <-> db   limpieza
+```
+
+Jenkins corre en un contenedor (`jenkins/jenkins:2.580.2-lts-jdk21`) con el volumen
+`jenkins_home` y usa el Docker del equipo a través de `/var/run/docker.sock`. Su configuración
+está en `jenkins/` como código (plugin Configuration as Code): el usuario administrador, la
+credencial `postgres-ci` y el job `calculadora-ci`, que toma el `Jenkinsfile` de este repositorio.
+
+### Levantar Jenkins
+
+1. Cree `jenkins/.env` a partir de la plantilla y cambie las contraseñas:
+
+   ```bash
+   cp jenkins/.env.example jenkins/.env
+   ```
+
+2. Construya y levante Jenkins:
+
+   ```bash
+   docker compose -f jenkins/docker-compose.yml up -d --build
+   ```
+
+3. Entre a http://localhost:8080 con el usuario de `jenkins/.env`. El job `calculadora-ci` ya
+   está creado y revisa GitHub cada minuto (Poll SCM): cada push a `main` lanza un build.
+
+### Etapas del Jenkinsfile
+
+| Etapa | Qué hace |
+| --- | --- |
+| `Checkout` | Descarga el commit desde GitHub |
+| `Build` | Construye `calculadora-app` y `calculadora-db` con el plugin Docker Pipeline |
+| `Test` | Corre las pruebas unitarias con pytest y publica el reporte JUnit |
+| `Test de integracion` | Levanta el compose con la credencial `postgres-ci` y ejecuta `scripts/prueba_comunicacion.sh` |
+| `post` | Publica los reportes, apaga los contenedores y borra las imágenes del build |
+
+Si una prueba falla, el build queda en rojo. Las contraseñas no están en el código: el
+`Jenkinsfile` solo conoce el ID de la credencial, y su valor lo guarda Jenkins.
+
+| Plugin | Para qué se usa |
+| --- | --- |
+| Git y GitHub | Descargar el repositorio y hacer Poll SCM |
+| Pipeline (`workflow-aggregator`) | Ejecutar el `Jenkinsfile` |
+| Docker Pipeline (`docker-workflow`) | `docker.build(...)` en la etapa Build |
+| Credentials y Credentials Binding | Guardar la credencial `postgres-ci` y usarla con `withCredentials` |
+| Pipeline: Stage View y Pipeline Graph View | Ver las etapas de cada build |
+| JUnit y Timestamper | Reporte de pruebas y hora en la salida de consola |
+| Configuration as Code y Job DSL | Configurar Jenkins y crear el job desde archivos |
 
 ## Guía de ejercicios: cómo ejecutar las pruebas
 
